@@ -1,0 +1,18 @@
+====== NEW INSTRUCTIONS ====== 
+1. Double click 'Run Generation Script.bat'
+2. Select the .nrrd file you want
+3. Wait for the script to complete (it will auto-close 10 seconds after completion)
+4. A 'generated' folder will be created with a text document of the 3d points, and a stack of images will be created in the 'voronoi_point_stack' folder with white pixels where all the points are.
+	- A folder called 'voronoi_reconstruction_stack' will contain the Voronoi diagram reconstructed from the generated points.
+
+
+
+
+====== OLD INSTRUCTIONS (still working, but more manual steps) ====== 
+1. Right click in the folder Donahue Scripts and open a Terminal
+2. Delete the 'generated' folder if it exists
+3. Paste in the following command: python .\generate_point_cloud_from_nrrd.py '.\Cropped NRRD.nrrd'
+	- The '.\Cropped NRRD.nrrd' can be replaced with any nrrd file
+4. The script will run and a 'generated' folder will be created with a text document of the 3d points, and a stack of images will be created in the 'voronoi_point_stack' folder with white pixels where all the points are.
+	- A folder called 'voronoi_reconstruction_stack' will contain the Voronoi diagram reconstructed from the generated points.
+

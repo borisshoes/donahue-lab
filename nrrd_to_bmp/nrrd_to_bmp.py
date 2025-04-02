@@ -4,12 +4,6 @@ from PIL import Image
 import os
 import sys
 
-import nrrd
-import numpy as np
-from PIL import Image
-import os
-import sys
-
 def convert_nrrd_to_bmp(nrrd_filename, output_dir, slice_axis='first'):
     # Load the NRRD file
     data, header = nrrd.read(nrrd_filename)
