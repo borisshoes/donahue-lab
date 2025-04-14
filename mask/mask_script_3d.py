@@ -38,6 +38,9 @@ def generate_and_combine_masks(input_dir, output_dir):
         except Exception as e:
             print(f"Failed to delete {entry_path}. Reason: {e}")
 
+    combined_mask_dir = os.path.join(output_dir, "combined_mask")
+    os.makedirs(combined_mask_dir, exist_ok=True)
+
     final_mask_dir = os.path.join(output_dir, "final_mask")
     os.makedirs(final_mask_dir, exist_ok=True)
     
@@ -67,25 +70,28 @@ def generate_and_combine_masks(input_dir, output_dir):
     # Sum the binary masks
     mask_sum = mask_x_binary + mask_y_binary + mask_z_binary
 
-    # Initialize the final mask with zeros
-    final_mask = np.zeros_like(mask_sum, dtype=np.uint8)
+    # Initialize the combined_mask with zeros
+    combined_mask = np.zeros_like(mask_sum, dtype=np.uint8)
 
     # Set brightness levels based on the number of masks that are white
-    final_mask[mask_sum == 1] = 85   # Brightness for 1 mask white
-    final_mask[mask_sum == 2] = 170  # Brightness for 2 masks white
-    final_mask[mask_sum == 3] = 255  # Brightness for all 3 masks white
+    combined_mask[mask_sum == 1] = 85   # Brightness for 1 mask white
+    combined_mask[mask_sum == 2] = 170  # Brightness for 2 masks white
+    combined_mask[mask_sum == 3] = 255  # Brightness for all 3 masks white
     
     # Save final mask
-    for i, img in enumerate(final_mask):
-        save_mask(os.path.join(final_mask_dir, filenames[i]), img.astype(np.uint8))
+    for i, img in enumerate(combined_mask):
+        save_mask(os.path.join(combined_mask_dir, filenames[i]), img.astype(np.uint8))
+
+    _, final_mask = mask_script_bmp.refine_mask(axis_dirs[2],combined_mask_dir,final_mask_dir,True,68)
 
     return final_mask
 
 def compare_masks(input_dir, output_dir):
     compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "final_mask"), "Final Mask")
-    compare_helper(os.path.join(input_dir, "axis_x"),os.path.join(output_dir, "axis_x"), "X Mask")
-    compare_helper(os.path.join(input_dir, "axis_y"),os.path.join(output_dir, "axis_y"), "Y Mask")
-    compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "axis_z"), "Z Mask")
+    #compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "combined_mask"), "Combined Mask")
+    #compare_helper(os.path.join(input_dir, "axis_x"),os.path.join(output_dir, "axis_x"), "X Mask")
+    #compare_helper(os.path.join(input_dir, "axis_y"),os.path.join(output_dir, "axis_y"), "Y Mask")
+    #compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "axis_z"), "Z Mask")
     
 
 def compare_helper(img_dir, mask_dir, title):
