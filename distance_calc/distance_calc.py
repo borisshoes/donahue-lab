@@ -1,9 +1,10 @@
-import os
+import os, heapq, sys
 import numpy as np
 from PIL import Image
 from numba import njit, prange
 from collections import deque
 import matplotlib.pyplot as plt
+from scipy.ndimage import distance_transform_edt
 
 def load_image_stack(folder):
     files = sorted([f for f in os.listdir(folder) if f.endswith(".bmp")])
@@ -17,43 +18,12 @@ def save_image_stack(output_folder, stack, filenames):
         img.save(os.path.join(output_folder, name))
 
 
-# Calculates the taxicab distance of all masked pixels from edge
-def compute_distance_transform(stack, new_stack):
-    depth, height, width = stack.shape
-    distance_stack = np.full((depth, height, width), -1, dtype=np.int32)
-    queue = deque()
-
-    size = depth*height*width
-    index = 0
-    
-    for z in range(depth):
-        for y in range(height):
-            for x in range(width):
-                if (100*(index)/size)//10 != (100*(index+1)/size)//10:
-                    print(f"{index}/{size}")
-                index += 1
-
-                if new_stack[z, y, x] == 255:
-                    distance_stack[z, y, x] = 0
-                    queue.append((z, y, x))
-    
-    directions = [
-        (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1),  # 2D neighbors
-        (-1, 0, 0), (1, 0, 0)  # Vertical neighbors
-    ]
-    
-    while queue:
-        z, y, x = queue.popleft()
-        current_distance = distance_stack[z, y, x]
-        
-        for dz, dy, dx in directions:
-            nz, ny, nx = z + dz, y + dy, x + dx
-            if 0 <= nz < depth and 0 <= ny < height and 0 <= nx < width:
-                if distance_stack[nz, ny, nx] == -1 and stack[nz, ny, nx] == 255:
-                    distance_stack[nz, ny, nx] = current_distance + 1
-                    queue.append((nz, ny, nx))
-    
-    return distance_stack
+# Calculates the euclidean distance of all masked pixels from edge
+def compute_distance_transform(stack, edge_stack, dims = [1.0,1.0,1.0]):
+    white_mask = (edge_stack == 255)
+    distances = distance_transform_edt(~white_mask, sampling=tuple(dims))
+    result = np.where(stack == 255, distances, -1)
+    return result
 
 
 # Shades mask based on distance
@@ -61,7 +31,10 @@ def normalize_distance_stack(distance_stack):
     max_distance = np.max(distance_stack[distance_stack >= 0])
     normalized_stack = np.full(distance_stack.shape, 0, dtype=np.uint8)
     
+    size = distance_stack.shape[0]
     for z in range(distance_stack.shape[0]):
+        if (100*(z)/size)//10 != (100*(z+1)/size)//10:
+            print(f"{z}/{size}")
         for y in range(distance_stack.shape[1]):
             for x in range(distance_stack.shape[2]):
                 if distance_stack[z, y, x] == -1:
@@ -80,6 +53,8 @@ def process_stack(stack):
     for z in prange(depth):
         for y in range(1, height - 1):
             for x in range(1, width - 1):
+                if stack[z, y, x] == 255 and (z == 0 or z == depth-1):
+                    new_stack[z, y, x] = 255  # Set white
                 if stack[z, y, x] < 255:  # Only consider black pixels
                     # Check neighbors in 3D space for pure white (255) pixels
                     if (
@@ -92,7 +67,7 @@ def process_stack(stack):
     
     return new_stack
 
-def calculate_distribution(distance_stack, data_folder):
+def calculate_distribution(distance_stack, data_folder, distance_bin = 1.0):
     """
     Calculate and plot the percentage of white pixels (value 255) in the raw bitmap stack
     for each unique distance value (excluding -1). Also computes the overall percentage of white pixels,
@@ -113,52 +88,60 @@ def calculate_distribution(distance_stack, data_folder):
     overall_percentage = (white_pixels_overall / total_pixels_overall) * 100
     print(f"Overall white pixel percentage (for pixels with distance >= 0): {overall_percentage:.2f}%")
     
-    # Get unique distance values, filter out -1, and sort them
-    unique_distances = np.unique(distance_stack)
-    unique_sorted = np.sort(unique_distances[unique_distances != -1])
-    
-    percentages = []
-    ci_errors = []
-    total_pixels_list = []
-    white_pixels_list = []
+    max_distance = np.max(distance_stack)
+
+    # Calculate the number of bins.
+    # If the maximum distance is not an exact multiple of distance_bin,
+    # this still allocates the last bin to cover at least distance_bin.
+    nbins = int(np.ceil(max_distance / distance_bin))
+    nbins = max(nbins, 1)  # Ensure there's at least one bin.
+    # Compute bin indices only for valid pixels.
+    # For invalid pixels the value in bin_indices is not used.
+    bin_indices = np.empty_like(distance_stack, dtype=np.int32)
+    bin_indices[valid_mask] = np.floor(distance_stack[valid_mask] / distance_bin).astype(np.int32)
+    bin_indices[valid_mask] = np.clip(bin_indices[valid_mask], 0, nbins - 1)
+
+    white_mask = np.logical_and(raw_stack == 255, valid_mask)
+    black_mask = np.logical_and(raw_stack == 0, valid_mask)
+
+    # We apply the masks to bin_indices so that we only count pixels with the correct value.
+    white_counts = np.bincount(bin_indices[white_mask].ravel(), minlength=nbins)
+    black_counts = np.bincount(bin_indices[black_mask].ravel(), minlength=nbins)
+    total_counts = white_counts + black_counts
+
+    # Optionally, compute the left edges of the bins for reference.
+    bin_edges = np.arange(0, nbins * distance_bin, distance_bin)
     
     # z-score for 95% confidence interval
     z = 1.96
+
+    percentages = 100 * np.divide(white_counts, total_counts, out=np.zeros_like(white_counts, dtype=float), where=total_counts != 0)
+    ci_errors = z * np.sqrt(np.divide(percentages * (100 - percentages), total_counts, out=np.full_like(percentages, 0.0, dtype=float), where=(total_counts != 0)))
     
-    # For each distance value, calculate total and white pixels, and compute confidence interval margin
-    for d in unique_sorted:
-        mask = (distance_stack == d)
-        total_pixels = np.sum(mask)
-        white_pixels = np.sum(raw_stack[mask] == 255)
-        if total_pixels > 0:
-            p = white_pixels / total_pixels
-            percentage = p * 100
-            ci_error = z * 100 * np.sqrt(p * (1 - p) / total_pixels)
-        else:
-            percentage = 0
-            ci_error = 0
-        percentages.append(percentage)
-        ci_errors.append(ci_error)
-        total_pixels_list.append(total_pixels)
-        white_pixels_list.append(white_pixels)
-    
+
+    print(white_counts)
+    print(total_counts)
+    print(percentages)
+    print(ci_errors)
+
     # Create a figure and primary axis for percentage
     fig, ax1 = plt.subplots(figsize=(10, 6))
-    x = range(len(unique_sorted))
+    x = np.arange(nbins)
     
     # Bar chart for percentage of white pixels with 95% confidence interval error bars
     ax1.bar(x, percentages, yerr=ci_errors, color='C0', capsize=5, label='Bone Fraction (%)')
-    ax1.set_xlabel("Taxicab Distance from Edge (Pixels)")
+    ax1.set_xlabel("Euclidean Distance from Edge (mm)")
     ax1.set_ylabel("Bone Fraction (%)", color='C0')
     ax1.tick_params(axis='y', labelcolor='C0')
     ax1.set_ylim(bottom=0)  # Set the primary y-axis lower limit to 0
-    plt.xticks(x, unique_sorted)
+    plt.xticks(x, [f"{edge:.1f}-{edge + distance_bin:.1f}" for edge in bin_edges],rotation = 45)
+    
     
     # Create a secondary axis for pixel counts and set its lower limit to 0
     ax2 = ax1.twinx()
-    line_total, = ax2.plot(x, total_pixels_list, color='C1', marker='o', linestyle='-', label='Total Pixels')
-    line_white, = ax2.plot(x, white_pixels_list, color='C2', marker='o', linestyle='-', label='Bone Pixels')
-    ax2.set_ylabel("Pixels")
+    line_total, = ax2.plot(x, total_counts, color='C1', marker='o', linestyle='-', label='Total Pixels')
+    line_white, = ax2.plot(x, white_counts, color='C2', marker='o', linestyle='-', label='Bone Pixels')
+    ax2.set_ylabel("Pixels per Distance Bin")
     ax2.tick_params(axis='y')
     ax2.set_ylim(bottom=0)
     
@@ -170,15 +153,16 @@ def calculate_distribution(distance_stack, data_folder):
     plt.show()
 
 
-def main(input_folder, data_folder, output_folder):
+def main(input_folder, data_folder, distance_map_folder, edge_stack_folder):
     stack, filenames = load_image_stack(input_folder)
-    processed_stack = process_stack(stack)
-    distance_stack = compute_distance_transform(stack, processed_stack)
-    normalized_stack = normalize_distance_stack(distance_stack)
-    save_image_stack(output_folder, normalized_stack, filenames)
+    edge_stack = process_stack(stack)
 
-    calculate_distribution(distance_stack, data_folder)
+    save_image_stack(edge_stack_folder, edge_stack, filenames)
+    distance_stack = compute_distance_transform(stack, edge_stack, [0.7421875,0.7421875,1.0])
+    normalized_stack = normalize_distance_stack(distance_stack)
+    save_image_stack(distance_map_folder, normalized_stack, filenames)
+    calculate_distribution(distance_stack, data_folder, 0.75)
     
 if __name__ == "__main__":
     #main("./BHS6 Bitmaps - Cleaned", "./mask/BHS6 Masks/3d_masks_auto/final_mask", "./distance_calc/distance_masks")
-    main("./mask/BHS6 Masks/3d_masks_auto/final_mask", "./BHS6 Bitmaps - Binary Cleaned", "./distance_calc/distance_masks")
+    main("./mask/BHS6 Masks/3d_masks_auto/final_mask", "./BHS6 Bitmaps - Binary Cleaned", "./distance_calc/distance_masks","./distance_calc/edge_masks")
