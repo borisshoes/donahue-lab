@@ -163,6 +163,9 @@ def main(input_folder, data_folder, distance_map_folder, edge_stack_folder):
     save_image_stack(distance_map_folder, normalized_stack, filenames)
     calculate_distribution(distance_stack, data_folder, 0.75)
     
+
+
+    
 if __name__ == "__main__":
     #main("./BHS6 Bitmaps - Cleaned", "./mask/BHS6 Masks/3d_masks_auto/final_mask", "./distance_calc/distance_masks")
     main("./mask/BHS6 Masks/3d_masks_auto/final_mask", "./BHS6 Bitmaps - Binary Cleaned", "./distance_calc/distance_masks","./distance_calc/edge_masks")

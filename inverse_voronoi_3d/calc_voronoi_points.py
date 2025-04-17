@@ -4,7 +4,9 @@ from PIL import Image
 from collections import deque
 import multiprocessing as mp
 import matplotlib.pyplot as plt
+from numba import njit, prange
 from scipy.ndimage import distance_transform_edt, minimum_filter, maximum_filter
+from distance_calc.distance_calc import compute_distance_transform
 import glob
 
 def load_image_stack(folder):
@@ -37,63 +39,30 @@ def write_points(coords_list, folder_path):
     
     print(f"Coordinates have been written to {file_path}")
 
-def bfs_find_distance(data_stack, z, y, x):
-    depth, height, width = data_stack.shape
-    queue = deque([(z, y, x, 0)])
-    visited = set()
-    visited.add((z, y, x))
-    
-    while queue:
-        cz, cy, cx, dist = queue.popleft()
-        if data_stack[cz, cy, cx] == 255:
-            return dist
-        
-        for dz, dy, dx in [(-1,0,0), (1,0,0), (0,-1,0), (0,1,0), (0,0,-1), (0,0,1)]:
-            nz, ny, nx = cz+dz, cy+dy, cx+dx
-            if 0 <= nz < depth and 0 <= ny < height and 0 <= nx < width and (nz, ny, nx) not in visited:
-                visited.add((nz, ny, nx))
-                queue.append((nz, ny, nx, dist+1))
-    return float('inf')  # Should never happen
 
-def process_slice(args):
-    z, data_stack, mask_stack = args
-    height, width = data_stack.shape[1:]
-    distance_map = np.zeros((height, width), dtype=np.uint8)
-    print(f"Processing slice {z+1}/{data_stack.shape[0]}...")
-    
-    max_distance = 0
-    voronoi_slice = np.zeros((height, width), dtype=np.uint8)
-    for y in range(height):
-        for x in range(width):
-            # Only process black pixels (value 0) in data_stack where the mask is white (255)
-            if data_stack[z, y, x] == 0 and mask_stack[z, y, x] == 255:
-                distance = bfs_find_distance(data_stack, z, y, x)
-                max_distance = max(max_distance, distance)
-                voronoi_slice[y, x] = distance
-    
-    # Scale distances for better visibility in the distance map
-    if max_distance > 0:
+# Takes in two binary image stacks and first generates a distance map from every black pixel 
+# to the nearest white pixel in data_stack, all black pixels in mask_stack have a distance value of -1
+# Then finds the local maxima, with plateau merging of radius 'merge_radius' and returns a list of 3d points
+# Returns a distance map, a stack of maxima, and a list of maxima
+def find_distance_maxima(data_stack, mask_stack, merge_radius=3, dims = [1.0, 1.0, 1.0]):
+    distances = compute_distance_transform(mask_stack, data_stack, dims)
+    max_dist = distances.max()
+    print(max_dist)
+    depth, height, width = data_stack.shape
+    distance_map = np.zeros_like(data_stack, dtype=np.uint8)
+
+    for z in range(depth):
         for y in range(height):
             for x in range(width):
-                if voronoi_slice[y, x] > 0:
-                    distance_map[y, x] = int((voronoi_slice[y, x] / max_distance) * 255)
-    
-    return z, voronoi_slice, distance_map
-
-def compute_voronoi(data_stack, mask_stack, merge_radius=3):
-    depth = data_stack.shape[0]
-    voronoi_stack = np.zeros_like(data_stack, dtype=np.uint8)
-    distance_stack = np.zeros_like(data_stack, dtype=np.uint8)
-
-    with mp.Pool(mp.cpu_count()) as pool:
-        results = pool.map(process_slice, [(z, data_stack, mask_stack) for z in range(depth)])
-
-    for z, voronoi_slice, distance_map in results:
-        voronoi_stack[z] = voronoi_slice
-        distance_stack[z] = distance_map
+                value = distances[z, y, x]
+                if value < 0:
+                    value = 0
+                if max_dist > 0:
+                    value = int((value / max_dist) * 255.0)
+                distance_map[z, y, x] = value
 
     print("Finding plateau-based maxima...")
-    visited = np.zeros_like(voronoi_stack, dtype=bool)
+    visited = np.zeros_like(distances, dtype=bool)
     maxima_points = []
 
     def find_plateau_and_centroid(z, y, x, value):
@@ -109,19 +78,19 @@ def compute_voronoi(data_stack, mask_stack, merge_radius=3):
                         if dz == dy == dx == 0:
                             continue
                         nz, ny, nx = cz + dz, cy + dy, cx + dx
-                        if (0 <= nz < depth and 0 <= ny < voronoi_stack.shape[1] and 0 <= nx < voronoi_stack.shape[2]
-                                and not visited[nz, ny, nx] and voronoi_stack[nz, ny, nx] == value):
+                        if (0 <= nz < depth and 0 <= ny < distances.shape[1] and 0 <= nx < distances.shape[2]
+                                and not visited[nz, ny, nx] and distances[nz, ny, nx] == value):
                             visited[nz, ny, nx] = True
                             queue.append((nz, ny, nx))
         centroid = np.mean(plateau_points, axis=0).round().astype(int)
         return tuple(centroid)
 
     for z in range(1, depth - 1):
-        for y in range(1, voronoi_stack.shape[1] - 1):
-            for x in range(1, voronoi_stack.shape[2] - 1):
-                if voronoi_stack[z, y, x] > 0 and not visited[z, y, x]:
-                    value = voronoi_stack[z, y, x]
-                    neighbors = [voronoi_stack[z + dz, y + dy, x + dx]
+        for y in range(1, distances.shape[1] - 1):
+            for x in range(1, distances.shape[2] - 1):
+                if distances[z, y, x] > 0 and not visited[z, y, x]:
+                    value = distances[z, y, x]
+                    neighbors = [distances[z + dz, y + dy, x + dx]
                                  for dz in [-1, 0, 1] for dy in [-1, 0, 1] for dx in [-1, 0, 1]
                                  if not (dz == dy == dx == 0)]
                     if value >= max(neighbors):
@@ -145,12 +114,12 @@ def compute_voronoi(data_stack, mask_stack, merge_radius=3):
         centroid = np.mean(cluster, axis=0).round().astype(int)
         merged_points.append(tuple(centroid))
 
-    local_maxima_stack = np.zeros_like(voronoi_stack, dtype=np.uint8)
+    local_maxima_stack = np.zeros_like(distances, dtype=np.uint8)
     for (z, y, x) in merged_points:
         local_maxima_stack[z, y, x] = 255
 
     print(f"Found and merged {len(merged_points)} maxima.")
-    return local_maxima_stack, distance_stack, merged_points
+    return local_maxima_stack, distance_map, merged_points
 
 
 def generate_voronoi_graph(local_maxima_stack):
@@ -190,7 +159,7 @@ def generate_all(folder_path, mask_folder_path, output_folder_path, distance_map
     mask_stack, mask_files = load_image_stack(mask_folder_path)
 
     # Compute the distance transform and extract local maxima (seed points)
-    voronoi_stack, distance_stack, points = compute_voronoi(data_stack, mask_stack)
+    voronoi_stack, distance_stack, points = find_distance_maxima(data_stack, mask_stack)
     save_image_stack(output_folder_path, voronoi_stack, data_files)
     save_image_stack(distance_map_output_folder, distance_stack, data_files)
     write_points(points,voronoi_point_list_folder)
