@@ -1,30 +1,10 @@
 import os, heapq, sys
 import numpy as np
-from PIL import Image
 from numba import njit, prange
 from collections import deque
 import matplotlib.pyplot as plt
-from scipy.ndimage import distance_transform_edt
-
-def load_image_stack(folder):
-    files = sorted([f for f in os.listdir(folder) if f.endswith(".bmp")])
-    stack = [np.array(Image.open(os.path.join(folder, f)).convert("L"), dtype=np.uint8) for f in files]
-    return np.array(stack), files
-
-def save_image_stack(output_folder, stack, filenames):
-    os.makedirs(output_folder, exist_ok=True)
-    for img, name in zip(stack, filenames):
-        img = Image.fromarray(img.astype(np.uint8))
-        img.save(os.path.join(output_folder, name))
-
-
-# Calculates the euclidean distance of all masked pixels from edge
-def compute_distance_transform(stack, edge_stack, dims = [1.0,1.0,1.0]):
-    white_mask = (edge_stack == 255)
-    distances = distance_transform_edt(~white_mask, sampling=tuple(dims))
-    result = np.where(stack == 255, distances, -1)
-    return result
-
+from inverse_voronoi_3d import calc_voronoi_points
+from utils.stack_utils import load_image_stack, save_image_stack, compute_distance_transform
 
 # Shades mask based on distance
 def normalize_distance_stack(distance_stack):
@@ -67,7 +47,49 @@ def process_stack(stack):
     
     return new_stack
 
-def calculate_distribution(distance_stack, data_folder, distance_bin = 1.0):
+def find_nodes(data_stack, mask_stack, dims = [1.0, 1.0, 1.0]):
+    points_stack, distance_stack, points = calc_voronoi_points.find_distance_maxima(~data_stack, mask_stack, dims = dims)
+
+    # prepare empty output mask (0/255)
+    spheres = np.zeros_like(points_stack, dtype=np.uint8)
+
+    # find all the center-voxels
+    centers = np.argwhere(points_stack == 255)
+
+    for z, y, x in centers:
+        r = distance_stack[z, y, x]
+        if r <= 0:
+            continue  # no sphere to draw
+
+        # compute how many voxels out to go in each axis
+        rz = int(np.ceil(r / dims[0]))
+        ry = int(np.ceil(r / dims[1]))
+        rx = int(np.ceil(r / dims[2]))
+
+        # clamp bounding‐box to volume
+        z0, z1 = max(0, z - rz), min(spheres.shape[0], z + rz + 1)
+        y0, y1 = max(0, y - ry), min(spheres.shape[1], y + ry + 1)
+        x0, x1 = max(0, x - rx), min(spheres.shape[2], x + rx + 1)
+
+        # generate coordinate offsets within that box
+        dz = np.arange(z0, z1) - z
+        dy = np.arange(y0, y1) - y
+        dx = np.arange(x0, x1) - x
+        zz, yy, xx = np.meshgrid(dz, dy, dx, indexing='ij')
+
+        # compute squared physical distance
+        dist2 = (zz * dims[0])**2 + (yy * dims[1])**2 + (xx * dims[2])**2
+
+        # fill where inside the sphere
+        mask = dist2 <= (r ** 2)
+        subvol = spheres[z0:z1, y0:y1, x0:x1]
+        subvol[mask] = 255
+        spheres[z0:z1, y0:y1, x0:x1] = subvol
+
+    return spheres
+
+
+def calculate_distribution(distance_stack, data_stack, distance_bin = 1.0):
     """
     Calculate and plot the percentage of white pixels (value 255) in the raw bitmap stack
     for each unique distance value (excluding -1). Also computes the overall percentage of white pixels,
@@ -78,13 +100,11 @@ def calculate_distribution(distance_stack, data_folder, distance_bin = 1.0):
         distance_stack (np.ndarray): 3D array of distance values.
         data_folder (str): Path to the folder containing the raw bitmap image stack.
     """
-    # Load the raw data stack from the provided folder
-    raw_stack, _ = load_image_stack(data_folder)
     
     # Calculate overall white pixel percentage only for pixels with a valid distance (>= 0)
     valid_mask = (distance_stack >= 0)
     total_pixels_overall = np.sum(valid_mask)
-    white_pixels_overall = np.sum(raw_stack[valid_mask] == 255)
+    white_pixels_overall = np.sum(data_stack[valid_mask] == 255)
     overall_percentage = (white_pixels_overall / total_pixels_overall) * 100
     print(f"Overall white pixel percentage (for pixels with distance >= 0): {overall_percentage:.2f}%")
     
@@ -101,8 +121,8 @@ def calculate_distribution(distance_stack, data_folder, distance_bin = 1.0):
     bin_indices[valid_mask] = np.floor(distance_stack[valid_mask] / distance_bin).astype(np.int32)
     bin_indices[valid_mask] = np.clip(bin_indices[valid_mask], 0, nbins - 1)
 
-    white_mask = np.logical_and(raw_stack == 255, valid_mask)
-    black_mask = np.logical_and(raw_stack == 0, valid_mask)
+    white_mask = np.logical_and(data_stack == 255, valid_mask)
+    black_mask = np.logical_and(data_stack == 0, valid_mask)
 
     # We apply the masks to bin_indices so that we only count pixels with the correct value.
     white_counts = np.bincount(bin_indices[white_mask].ravel(), minlength=nbins)
@@ -154,18 +174,21 @@ def calculate_distribution(distance_stack, data_folder, distance_bin = 1.0):
 
 
 def main(input_folder, data_folder, distance_map_folder, edge_stack_folder):
-    stack, filenames = load_image_stack(input_folder)
-    edge_stack = process_stack(stack)
+    mask_stack, filenames = load_image_stack(input_folder)
+    data_stack, _ = load_image_stack(data_folder)
 
-    save_image_stack(edge_stack_folder, edge_stack, filenames)
-    distance_stack = compute_distance_transform(stack, edge_stack, [0.7421875,0.7421875,1.0])
-    normalized_stack = normalize_distance_stack(distance_stack)
-    save_image_stack(distance_map_folder, normalized_stack, filenames)
-    calculate_distribution(distance_stack, data_folder, 0.75)
+    # edge_stack = process_stack(mask_stack)
+    # save_image_stack(edge_stack_folder, edge_stack, filenames)
+
+    # distance_stack = compute_distance_transform(mask_stack, edge_stack, [0.7421875,0.7421875,1.0])
+    # normalized_stack = normalize_distance_stack(distance_stack)
+    # save_image_stack(distance_map_folder, normalized_stack, filenames)
+    # calculate_distribution(distance_stack, data_stack, 0.75)
     
+    node_stack = find_nodes(data_stack, mask_stack, [0.7421875,0.7421875,1.0])
+    save_image_stack("./distance_calc/node_stack", node_stack, filenames)
 
 
-    
 if __name__ == "__main__":
     #main("./BHS6 Bitmaps - Cleaned", "./mask/BHS6 Masks/3d_masks_auto/final_mask", "./distance_calc/distance_masks")
     main("./mask/BHS6 Masks/3d_masks_auto/final_mask", "./BHS6 Bitmaps - Binary Cleaned", "./distance_calc/distance_masks","./distance_calc/edge_masks")

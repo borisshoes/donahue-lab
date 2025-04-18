@@ -1,24 +1,10 @@
 import os
 import numpy as np
-from PIL import Image
 from collections import deque
 import multiprocessing as mp
 import matplotlib.pyplot as plt
-from numba import njit, prange
+from utils.stack_utils import load_image_stack, save_image_stack, compute_distance_transform
 from scipy.ndimage import distance_transform_edt, minimum_filter, maximum_filter
-from distance_calc.distance_calc import compute_distance_transform
-import glob
-
-def load_image_stack(folder):
-    files = sorted([f for f in os.listdir(folder) if f.endswith(".bmp")])
-    stack = [np.array(Image.open(os.path.join(folder, f)).convert("L"), dtype=np.uint8) for f in files]
-    return np.array(stack), files
-
-def save_image_stack(output_folder, stack, filenames):
-    os.makedirs(output_folder, exist_ok=True)
-    for img, name in zip(stack, filenames):
-        img = Image.fromarray(img.astype(np.uint8))
-        img.save(os.path.join(output_folder, name))
 
 def write_points(coords_list, folder_path):
     # Verify that the folder exists
@@ -159,13 +145,13 @@ def generate_all(folder_path, mask_folder_path, output_folder_path, distance_map
     mask_stack, mask_files = load_image_stack(mask_folder_path)
 
     # Compute the distance transform and extract local maxima (seed points)
-    voronoi_stack, distance_stack, points = find_distance_maxima(data_stack, mask_stack)
-    save_image_stack(output_folder_path, voronoi_stack, data_files)
+    points_stack, distance_stack, points = find_distance_maxima(data_stack, mask_stack)
+    save_image_stack(output_folder_path, points_stack, data_files)
     save_image_stack(distance_map_output_folder, distance_stack, data_files)
     write_points(points,voronoi_point_list_folder)
 
     # Use the local maxima (seed points) to generate the full Voronoi graph
-    voronoi_graph_stack = generate_voronoi_graph(voronoi_stack)
+    voronoi_graph_stack = generate_voronoi_graph(points_stack)
     save_image_stack(voronoi_reconstruction_folder, voronoi_graph_stack, data_files)
 
 
