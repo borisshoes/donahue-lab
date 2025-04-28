@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import deque
 import multiprocessing as mp
 import matplotlib.pyplot as plt
-from stack_utils import load_image_stack, save_image_stack, compute_distance_transform, prep_folder, validate_folder
+from modules.stack_utils import load_image_stack, save_image_stack, compute_distance_transform, prep_folder, validate_folder
 from scipy.ndimage import distance_transform_edt, minimum_filter, maximum_filter
 
 def write_points(coords_list, folder_path):

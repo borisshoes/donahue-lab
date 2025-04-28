@@ -3,8 +3,8 @@ import numpy as np
 from numba import njit, prange
 from collections import deque
 import matplotlib.pyplot as plt
-import calc_voronoi_points
-from stack_utils import load_image_stack, save_image_stack, compute_distance_transform
+from modules import calc_voronoi_points
+from modules.stack_utils import load_image_stack, save_image_stack, compute_distance_transform
 
 # Shades mask based on distance
 def normalize_distance_stack(distance_stack):

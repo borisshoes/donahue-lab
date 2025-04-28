@@ -2,7 +2,7 @@ import nrrd, os, sys, argparse
 import numpy as np
 from pathlib import Path
 from PIL import Image
-from stack_utils import prep_folder
+from modules.stack_utils import prep_folder
 
 def convert_nrrd_to_bmp(nrrd_filename, output_dir, slice_axis='first'):
     # Load the NRRD file

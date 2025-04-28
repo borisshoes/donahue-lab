@@ -1,6 +1,6 @@
 import os, cv2, argparse, sys
 from pathlib import Path
-from stack_utils import prep_folder, validate_folder
+from modules.stack_utils import prep_folder, validate_folder
 
 def convert_ct_images_to_binary(input_folder, output_folder):
     prep_folder(output_folder)

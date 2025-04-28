@@ -2,7 +2,7 @@ import mask_script_bmp, os, shutil, cv2 , argparse
 import numpy as np
 from PIL import Image
 from pathlib import Path
-from stack_utils import load_image_stack, prep_folder, validate_folder, save_image_stack
+from modules.stack_utils import load_image_stack, prep_folder, validate_folder, save_image_stack
 
 def save_mask(output_path, mask):
     """Saves a single binary mask image."""

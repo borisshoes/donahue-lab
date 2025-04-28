@@ -1,7 +1,7 @@
 import os, argparse
 from pathlib import Path
 from PIL import Image
-from stack_utils import prep_folder, validate_folder
+from modules.stack_utils import prep_folder, validate_folder
 
 def process_images(input_folder, output_folder):
     # Create the output folder if it doesn't exist

@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
-from stack_utils import prep_folder, validate_folder
+from modules.stack_utils import prep_folder, validate_folder
 
 
 def refine_mask(data_folder, mask_folder, output_folder, save_examples = False, example_slice = 47):

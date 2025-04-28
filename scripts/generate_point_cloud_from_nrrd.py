@@ -1,9 +1,10 @@
 import argparse, shutil, sys, os
 import tkinter as tk
 from tkinter import filedialog
-from nrrd_to_bmp import nrrd_to_bmp
-import mask_blank
-import calc_voronoi_points
+from modules import nrrd_to_bmp
+from modules import mask_blank
+from modules import calc_voronoi_points
+from modules.stack_utils import prep_folder
 
 def main():
     parser = argparse.ArgumentParser(
@@ -27,19 +28,14 @@ def main():
             print("No file selected")
             sys.exit()
 
-    folder_path = "./generated"
-    if os.path.exists(folder_path) and os.path.isdir(folder_path):
-        shutil.rmtree(folder_path)
+    folder_path = "../generated"
 
-    nrrd_to_bmp.convert_nrrd_to_bmp(input_file, "./generated/bmp_stack", "last")
-    mask_blank.process_images("./generated/bmp_stack", "./generated/mask_stack")
+    nrrd_to_bmp.convert_nrrd_to_bmp(input_file, folder_path+"/bmp_stack", "last")
+    mask_blank.process_images(folder_path+"/bmp_stack", folder_path+"/mask_stack")
     calc_voronoi_points.generate_all(
-        "./generated/bmp_stack",
-        "./generated/mask_stack",
-        "./generated/voronoi_point_stack",
-        "./generated/voronoi_map_stack",
-        "./generated/voronoi_reconstruction_stack",
-        "./generated")
+        folder_path+"/bmp_stack",
+        folder_path+"/mask_stack",
+        folder_path)
     
 
 if __name__ == '__main__':
