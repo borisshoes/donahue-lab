@@ -106,7 +106,7 @@ def find_distance_maxima(data_stack, mask_stack, merge_radius=3, dims = [1.0, 1.
         local_maxima_stack[z, y, x] = 255
 
     print(f"Found and merged {len(merged_points)} maxima.")
-    return local_maxima_stack, distance_map, merged_points
+    return local_maxima_stack, distance_map, merged_points, distances
 
 
 def generate_voronoi_graph(local_maxima_stack):
@@ -153,7 +153,7 @@ def generate_all(folder_path, mask_folder_path, output_folder_path):
     mask_stack, mask_files = load_image_stack(mask_folder_path)
 
     # Compute the distance transform and extract local maxima (seed points)
-    points_stack, distance_stack, points = find_distance_maxima(data_stack, mask_stack)
+    points_stack, distance_stack, points, distances = find_distance_maxima(data_stack, mask_stack)
     save_image_stack(point_cloud_output_folder, points_stack, data_files)
     save_image_stack(distance_map_output_folder, distance_stack, data_files)
     write_points(points,output_folder_path)

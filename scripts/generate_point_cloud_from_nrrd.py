@@ -28,7 +28,7 @@ def main():
             print("No file selected")
             sys.exit()
 
-    folder_path = "../generated"
+    folder_path = "./generated"
 
     nrrd_to_bmp.convert_nrrd_to_bmp(input_file, folder_path+"/bmp_stack", "last")
     mask_blank.process_images(folder_path+"/bmp_stack", folder_path+"/mask_stack")

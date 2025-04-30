@@ -10,7 +10,7 @@ def load_image_stack(folder):
     return np.array(stack), files
 
 def save_image_stack(output_folder, stack, filenames):
-    os.makedirs(output_folder, exist_ok=True)
+    prep_folder(output_folder)
     for img, name in zip(stack, filenames):
         img = Image.fromarray(img.astype(np.uint8))
         img.save(os.path.join(output_folder, name))

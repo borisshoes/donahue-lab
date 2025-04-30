@@ -1,10 +1,15 @@
-import os, heapq, sys
+import os, heapq, sys, random
 import numpy as np
 from numba import njit, prange
 from collections import deque
+from tqdm import tqdm
+from tqdm.contrib.concurrent import thread_map
 import matplotlib.pyplot as plt
+from itertools import combinations
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules import calc_voronoi_points
 from modules.stack_utils import load_image_stack, save_image_stack, compute_distance_transform
+from modules.a_star_pathfind import a_star_pathfind
 
 # Shades mask based on distance
 def normalize_distance_stack(distance_stack):
@@ -48,45 +53,50 @@ def process_stack(stack):
     return new_stack
 
 def find_nodes(data_stack, mask_stack, dims = [1.0, 1.0, 1.0]):
-    points_stack, distance_stack, points = calc_voronoi_points.find_distance_maxima(~data_stack, mask_stack, dims = dims)
+    points_stack, distance_stack, points, distances = calc_voronoi_points.find_distance_maxima(~data_stack, mask_stack, dims = dims, merge_radius=3)
 
-    # prepare empty output mask (0/255)
-    spheres = np.zeros_like(points_stack, dtype=np.uint8)
+    # prepare output array (same dtype & shape as points_stack)
+    node_stack = np.zeros_like(points_stack)
+    white_value = points_stack.max()  # so if input mask is 0/255, we fill with 255; if 0/1, with 1
 
-    # find all the center-voxels
-    centers = np.argwhere(points_stack == 255)
+    dz, dy, dx = dims
 
-    for z, y, x in centers:
-        r = distance_stack[z, y, x]
-        if r <= 0:
-            continue  # no sphere to draw
+    culled_points = []
+    count = 0
+    total = len(points)
+    for z0, y0, x0 in points:
+        count+=1
+        if count % 50 == 0:
+            print(f"{count}/{total}")
 
-        # compute how many voxels out to go in each axis
-        rz = int(np.ceil(r / dims[0]))
-        ry = int(np.ceil(r / dims[1]))
-        rx = int(np.ceil(r / dims[2]))
+        r = distances[z0, y0, x0]
+        if r <= 1.5:
+            continue
+        culled_points.append((z0,y0,x0))
 
-        # clamp bounding‐box to volume
-        z0, z1 = max(0, z - rz), min(spheres.shape[0], z + rz + 1)
-        y0, y1 = max(0, y - ry), min(spheres.shape[1], y + ry + 1)
-        x0, x1 = max(0, x - rx), min(spheres.shape[2], x + rx + 1)
+        # compute how many voxels in each direction we need to cover that radius
+        rz = int(np.ceil(r / dz))
+        ry = int(np.ceil(r / dy))
+        rx = int(np.ceil(r / dx))
 
-        # generate coordinate offsets within that box
-        dz = np.arange(z0, z1) - z
-        dy = np.arange(y0, y1) - y
-        dx = np.arange(x0, x1) - x
-        zz, yy, xx = np.meshgrid(dz, dy, dx, indexing='ij')
+        # clamp to image bounds
+        z_min, z_max = max(z0 - rz, 0), min(z0 + rz + 1, node_stack.shape[0])
+        y_min, y_max = max(y0 - ry, 0), min(y0 + ry + 1, node_stack.shape[1])
+        x_min, x_max = max(x0 - rx, 0), min(x0 + rx + 1, node_stack.shape[2])
 
-        # compute squared physical distance
-        dist2 = (zz * dims[0])**2 + (yy * dims[1])**2 + (xx * dims[2])**2
+        # build a small grid of coordinates in the bounding box
+        zz, yy, xx = np.ogrid[z_min:z_max, y_min:y_max, x_min:x_max]
 
-        # fill where inside the sphere
-        mask = dist2 <= (r ** 2)
-        subvol = spheres[z0:z1, y0:y1, x0:x1]
-        subvol[mask] = 255
-        spheres[z0:z1, y0:y1, x0:x1] = subvol
+        # compute physical distance from (z0,y0,x0)
+        dist = np.sqrt(((zz - z0) * dz) ** 2 +
+                       ((yy - y0) * dy) ** 2 +
+                       ((xx - x0) * dx) ** 2)
 
-    return spheres
+        # wherever that distance is <= r, set the output to white_value
+        mask = (dist <= r)
+        node_stack[z_min:z_max, y_min:y_max, x_min:x_max][mask] = white_value
+
+    return points_stack, distance_stack, node_stack, distances, culled_points
 
 
 def calculate_distribution(distance_stack, data_stack, distance_bin = 1.0):
@@ -106,6 +116,7 @@ def calculate_distribution(distance_stack, data_stack, distance_bin = 1.0):
     total_pixels_overall = np.sum(valid_mask)
     white_pixels_overall = np.sum(data_stack[valid_mask] == 255)
     overall_percentage = (white_pixels_overall / total_pixels_overall) * 100
+    print(f"{total_pixels_overall} {white_pixels_overall}")
     print(f"Overall white pixel percentage (for pixels with distance >= 0): {overall_percentage:.2f}%")
     
     max_distance = np.max(distance_stack)
@@ -172,25 +183,80 @@ def calculate_distribution(distance_stack, data_stack, distance_bin = 1.0):
     fig.tight_layout()
     plt.show()
 
+def trace_segments(distances, nodes, dims = [1.0,1.0,1.0]):
+    trace_stack = np.zeros_like(distances, dtype=np.uint8)
 
-def main(input_folder, data_folder, distance_map_folder, edge_stack_folder):
-    mask_stack, filenames = load_image_stack(input_folder)
+    paths = []
+    pairs = list(combinations(nodes, 2))
+    random.shuffle(pairs)
+
+    count = 0
+    num_pairs = len(pairs)
+    for p1, p2 in pairs:
+        paths.append(a_star_pathfind(distances,p1,p2,dims,alpha=0.3))
+        count += 1
+        if count % 1000 == 0:
+            print(f"{count}/{num_pairs}")
+
+    for path in paths:
+        for (z, y, x) in path:
+            if (0 <= z < trace_stack.shape[0] and
+                0 <= y < trace_stack.shape[1] and
+                0 <= x < trace_stack.shape[2]):
+                trace_stack[z, y, x] = 255
+
+    return trace_stack
+
+def trace_segments_mt(distances, nodes, dims=[1.0,1.0,1.0],
+                      alpha=0.3, max_workers=None, report_every=1000):
+    trace_stack = np.zeros_like(distances, dtype=np.uint8)
+    pairs = list(combinations(nodes, 2))
+    random.shuffle(pairs)
+    num_pairs = len(pairs)
+
+    paths = []
+    def _worker(pair):
+        return a_star_pathfind(distances, pair[0], pair[1], dims, alpha)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as exe:
+        paths = list(tqdm(
+            exe.map(_worker, pairs), 
+            total=num_pairs,
+            unit="path"
+        ))
+
+    print("Completed pathfinding, now painting")
+    # now paint them in
+    for path in paths:
+        for (z, y, x) in path:
+            if (0 <= z < trace_stack.shape[0] and
+                0 <= y < trace_stack.shape[1] and
+                0 <= x < trace_stack.shape[2]):
+                trace_stack[z, y, x] = 255
+
+    return trace_stack
+
+
+def calculate_bone_fraction_curve(mask_folder, data_folder, distance_map_folder, edge_stack_folder):
+    mask_stack, filenames = load_image_stack(mask_folder)
     data_stack, _ = load_image_stack(data_folder)
 
-    # edge_stack = process_stack(mask_stack)
-    # save_image_stack(edge_stack_folder, edge_stack, filenames)
+    edge_stack = process_stack(mask_stack)
+    save_image_stack(edge_stack_folder, edge_stack, filenames)
 
-    # distance_stack = compute_distance_transform(mask_stack, edge_stack, [0.7421875,0.7421875,1.0])
-    # normalized_stack = normalize_distance_stack(distance_stack)
-    # save_image_stack(distance_map_folder, normalized_stack, filenames)
-    # calculate_distribution(distance_stack, data_stack, 0.75)
-    
-    node_stack = find_nodes(data_stack, mask_stack, [0.7421875,0.7421875,1.0])
-    save_image_stack("./distance_calc/node_stack", node_stack, filenames)
+    distance_stack = compute_distance_transform(mask_stack, edge_stack, [1.0,0.7421875,0.7421875])
+    normalized_stack = normalize_distance_stack(distance_stack)
+    save_image_stack(distance_map_folder, normalized_stack, filenames)
+    calculate_distribution(distance_stack, data_stack, 0.75)
 
-
-if __name__ == "__main__":
-    
-
-    #main("./BHS6 Bitmaps - Cleaned", "./mask/BHS6 Masks/3d_masks_auto/final_mask", "./distance_calc/distance_masks")
-    main("./mask/BHS6 Masks/3d_masks_auto/final_mask", "./BHS6 Bitmaps - Binary Cleaned", "./distance_calc/distance_masks","./distance_calc/edge_masks")
+def generate_node_stack(mask_folder, data_folder, distance_map_folder, point_folder, node_folder, trace_folder):
+    dims = [1.0,0.7421875,0.7421875]
+    mask_stack, filenames = load_image_stack(mask_folder)
+    data_stack, _ = load_image_stack(data_folder)
+    point_stack, distance_stack, node_stack, distances, points = find_nodes(data_stack, mask_stack, dims)
+    print(f"Found {len(points)} culled points")
+    trace_stack = trace_segments_mt(distances,points,dims)
+    save_image_stack(point_folder, point_stack, filenames)
+    save_image_stack(distance_map_folder, distance_stack, filenames)
+    save_image_stack(node_folder, node_stack, filenames)
+    save_image_stack(trace_folder, trace_stack, filenames)

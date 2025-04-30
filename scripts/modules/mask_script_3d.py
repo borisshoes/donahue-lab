@@ -1,15 +1,13 @@
-import mask_script_bmp, os, shutil, cv2 , argparse
+import os, shutil, cv2 , argparse
 import numpy as np
 from PIL import Image
 from pathlib import Path
 from modules.stack_utils import load_image_stack, prep_folder, validate_folder, save_image_stack
-
-def save_mask(output_path, mask):
-    """Saves a single binary mask image."""
-    Image.fromarray(mask).save(output_path)
+from modules import mask_script_bmp
 
 def generate_and_combine_masks(input_dir, output_dir):
     """Generates masks for each axis and combines them into a final mask matching the Z-axis orientation."""
+    prep_folder(output_dir)
     axis_dirs = [
         os.path.join(input_dir, "axis_x"),
         os.path.join(input_dir, "axis_y"),
@@ -74,17 +72,19 @@ def generate_and_combine_masks(input_dir, output_dir):
     
     # Save final mask
     save_image_stack(combined_mask_dir,combined_mask,filenames)
+    #save_image_stack(final_mask_dir,combined_mask,filenames)
 
-    _, final_mask = mask_script_bmp.refine_mask(axis_dirs[2],combined_mask_dir,final_mask_dir,True,68)
+    _, final_mask = mask_script_bmp.refine_mask(axis_dirs[2],combined_mask_dir,final_mask_dir,False,68)
 
     return final_mask
 
 def compare_masks(input_dir, output_dir):
-    compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "final_mask"), "Final Mask")
+    #compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "final_mask"), "Final Mask")
     #compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "combined_mask"), "Combined Mask")
     #compare_helper(os.path.join(input_dir, "axis_x"),os.path.join(output_dir, "axis_x"), "X Mask")
     #compare_helper(os.path.join(input_dir, "axis_y"),os.path.join(output_dir, "axis_y"), "Y Mask")
     #compare_helper(os.path.join(input_dir, "axis_z"),os.path.join(output_dir, "axis_z"), "Z Mask")
+    pass
     
 
 def compare_helper(img_dir, mask_dir, title):

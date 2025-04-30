@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import imageio
+import imageio.v2 as imageio
 from vedo import Volume, Plotter
 import tkinter as tk
 from tkinter import filedialog
