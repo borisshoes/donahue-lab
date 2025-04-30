@@ -1,4 +1,4 @@
-import os, heapq, sys, random
+import os, heapq, sys, random, time
 import numpy as np
 from numba import njit, prange
 from collections import deque
@@ -96,10 +96,124 @@ def find_nodes(data_stack, mask_stack, dims = [1.0, 1.0, 1.0]):
         mask = (dist <= r)
         node_stack[z_min:z_max, y_min:y_max, x_min:x_max][mask] = white_value
 
+    print(f"Found {len(culled_points)} unculled points")
     return points_stack, distance_stack, node_stack, distances, culled_points
 
 
-def calculate_distribution(distance_stack, data_stack, distance_bin = 1.0):
+def compute_path_length(path, dims):
+    """
+    Sum euclidean segment lengths along `path`, scaling each axis by dims.
+    """
+    total = 0.0
+    for (z0, y0, x0), (z1, y1, x1) in zip(path, path[1:]):
+        dz = (z1 - z0) * dims[0]
+        dy = (y1 - y0) * dims[1]
+        dx = (x1 - x0) * dims[2]
+        total += np.sqrt(dx*dx + dy*dy + dz*dz)
+    return total
+
+def calc_deflection_ratio(path, dims=[1.0, 1.0, 1.0]):
+    """
+    Path is a sequence of (z, y, x) points.
+    Compute the ratio of the max perpendicular deflection
+    from the straight line (start→end) over that line's length.
+    """
+    if len(path) < 2:
+        return 0.0
+
+    pts = np.asarray(path, dtype=float)  # shape (N,3) in (z,y,x)
+
+    scales = np.asarray(dims, dtype=float)    # (z_scale, y_scale, x_scale)
+    scaled = pts * scales                 # apply anisotropic scaling
+
+    start = scaled[0]
+    end   = scaled[-1]
+    line_vec = end - start
+    line_len = np.linalg.norm(line_vec)
+    if line_len == 0.0:
+        return 0.0
+
+    # vector from start to each point
+    diffs = scaled - start                    # shape (N,3)
+
+    # perp distance = ||cross(diffs, line_vec)|| / |line_vec|
+    cross = np.cross(diffs, line_vec)         # shape (N,3)
+    perp_dists = np.linalg.norm(cross, axis=1) / line_len
+
+    max_deflection = perp_dists.max()
+    return max_deflection / line_len
+
+def calc_path_stats(paths, distance_bin = 1.0, dims = [1.0, 1.0, 1.0]):
+    """
+    Bin `paths` by their scaled length, compute deflection ratio on each,
+    and plot:
+      - bar = mean(deflection_ratio*100) per bin (left y)
+      - line = count of paths in each bin       (right y)
+
+    Parameters
+    ----------
+    paths : List[List[tuple]]
+        Each path is a list of (z,y,x) points.
+    calc_deflection_ratio : Callable[[List[tuple]], float]
+        Function returning a deflection ratio (0–1) for a single path.
+    distance_bin : float
+        Bin width along the length axis.
+    dims : sequence of 3 floats
+        Scale factors for z, y, x when computing true path length.
+    """
+    print("Calculating path statistics")
+    # 1) compute lengths and ratios
+    lengths = np.array([compute_path_length(p, dims) for p in paths])
+    ratios  = np.array([calc_deflection_ratio(p) * 100.0 for p in paths])
+
+    # 2) define bins
+    max_len = lengths.max() if len(lengths)>0 else 0.0
+    nbins = max(1, int(np.ceil(max_len / distance_bin)))
+    bin_edges = np.arange(0, (nbins+1)*distance_bin, distance_bin)
+
+    # 3) assign each path to a bin
+    bin_idxs = np.floor_divide(lengths, distance_bin).astype(int)
+    bin_idxs = np.clip(bin_idxs, 0, nbins-1)
+
+    # 4) aggregate per bin
+    mean_ratio = np.zeros(nbins)
+    counts     = np.zeros(nbins, dtype=int)
+    for b in range(nbins):
+        sel = (bin_idxs == b)
+        counts[b]     = sel.sum()
+        mean_ratio[b] = ratios[sel].mean() if counts[b]>0 else 0.0
+    
+    # z-score for 95% confidence interval
+    z = 1.96
+    ci_errors = z * np.sqrt(np.divide(mean_ratio * (100 - mean_ratio), counts, out=np.full_like(mean_ratio, 0.0, dtype=float), where=(counts != 0)))
+
+    # 5) plot
+    x = np.arange(nbins)
+    fig, ax1 = plt.subplots(figsize=(10,6))
+
+    bars = ax1.bar(x, mean_ratio, label='Mean Deflection (%)', alpha=0.75, yerr=ci_errors)
+    ax1.set_xlabel(f'Path Length (mm) [bin size = {distance_bin} mm]')
+    ax1.set_ylabel('Mean Deflection Ratio (%)')
+    ax1.set_ylim(0, mean_ratio.max()*1.1 if len(mean_ratio)>0 else 1)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([f"{bin_edges[i]:.1f}–{bin_edges[i+1]:.1f}" for i in x],
+                        rotation=45, ha='right')
+
+    ax2 = ax1.twinx()
+    line_counts, = ax2.plot(x, counts, marker='o', linestyle='-',
+                             label='Paths per Bin')
+    ax2.set_ylabel('Number of Paths')
+    ax2.set_ylim(0, counts.max()*1.1 if len(counts)>0 else 1)
+
+    # legend
+    ax1.legend(loc='upper left')
+    ax2.legend([line_counts], ['Paths per Bin'], loc='upper right')
+
+    plt.title('Deflection Ratio vs. Path Length Distribution')
+    fig.tight_layout()
+    plt.show()
+
+def calc_bone_distribution(distance_stack, data_stack, distance_bin = 1.0):
     """
     Calculate and plot the percentage of white pixels (value 255) in the raw bitmap stack
     for each unique distance value (excluding -1). Also computes the overall percentage of white pixels,
@@ -148,7 +262,6 @@ def calculate_distribution(distance_stack, data_stack, distance_bin = 1.0):
 
     percentages = 100 * np.divide(white_counts, total_counts, out=np.zeros_like(white_counts, dtype=float), where=total_counts != 0)
     ci_errors = z * np.sqrt(np.divide(percentages * (100 - percentages), total_counts, out=np.full_like(percentages, 0.0, dtype=float), where=(total_counts != 0)))
-    
 
     print(white_counts)
     print(total_counts)
@@ -195,9 +308,10 @@ def trace_segments(distances, nodes, dims = [1.0,1.0,1.0]):
     for p1, p2 in pairs:
         paths.append(a_star_pathfind(distances,p1,p2,dims,alpha=0.3))
         count += 1
-        if count % 1000 == 0:
+        if count % 10000 == 0:
             print(f"{count}/{num_pairs}")
 
+    print("Completed pathfinding, now painting")
     for path in paths:
         for (z, y, x) in path:
             if (0 <= z < trace_stack.shape[0] and
@@ -205,27 +319,34 @@ def trace_segments(distances, nodes, dims = [1.0,1.0,1.0]):
                 0 <= x < trace_stack.shape[2]):
                 trace_stack[z, y, x] = 255
 
-    return trace_stack
+    return trace_stack, paths
 
 def trace_segments_mt(distances, nodes, dims=[1.0,1.0,1.0],
-                      alpha=0.3, max_workers=None, report_every=1000):
+                      alpha=0.3, max_workers=None):
     trace_stack = np.zeros_like(distances, dtype=np.uint8)
     pairs = list(combinations(nodes, 2))
     random.shuffle(pairs)
     num_pairs = len(pairs)
 
     paths = []
-    def _worker(pair):
-        return a_star_pathfind(distances, pair[0], pair[1], dims, alpha)
+    # helper to call A* with our fixed params
+    def _worker(p1, p2):
+        return a_star_pathfind(distances, p1, p2, dims, alpha)
 
+    print("Engaging pathfinding, this may take a while...")
+    start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=max_workers) as exe:
-        paths = list(tqdm(
-            exe.map(_worker, pairs), 
-            total=num_pairs,
-            unit="path"
-        ))
+        # submit all tasks
+        futures = {exe.submit(_worker, p1, p2): i
+                   for i, (p1, p2) in enumerate(pairs, start=1)}
 
-    print("Completed pathfinding, now painting")
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            path = fut.result()
+            paths.append(path)
+
+    end   = time.perf_counter()
+    print(f"Completed pathfinding in {end - start:.6f} seconds, now painting")
     # now paint them in
     for path in paths:
         for (z, y, x) in path:
@@ -234,7 +355,7 @@ def trace_segments_mt(distances, nodes, dims=[1.0,1.0,1.0],
                 0 <= x < trace_stack.shape[2]):
                 trace_stack[z, y, x] = 255
 
-    return trace_stack
+    return trace_stack, paths
 
 
 def calculate_bone_fraction_curve(mask_folder, data_folder, distance_map_folder, edge_stack_folder):
@@ -247,16 +368,16 @@ def calculate_bone_fraction_curve(mask_folder, data_folder, distance_map_folder,
     distance_stack = compute_distance_transform(mask_stack, edge_stack, [1.0,0.7421875,0.7421875])
     normalized_stack = normalize_distance_stack(distance_stack)
     save_image_stack(distance_map_folder, normalized_stack, filenames)
-    calculate_distribution(distance_stack, data_stack, 0.75)
+    calc_bone_distribution(distance_stack, data_stack, 0.75)
 
 def generate_node_stack(mask_folder, data_folder, distance_map_folder, point_folder, node_folder, trace_folder):
     dims = [1.0,0.7421875,0.7421875]
     mask_stack, filenames = load_image_stack(mask_folder)
     data_stack, _ = load_image_stack(data_folder)
     point_stack, distance_stack, node_stack, distances, points = find_nodes(data_stack, mask_stack, dims)
-    print(f"Found {len(points)} culled points")
-    trace_stack = trace_segments_mt(distances,points,dims)
+    trace_stack, paths = trace_segments_mt(distances,points,dims)
     save_image_stack(point_folder, point_stack, filenames)
     save_image_stack(distance_map_folder, distance_stack, filenames)
     save_image_stack(node_folder, node_stack, filenames)
     save_image_stack(trace_folder, trace_stack, filenames)
+    calc_path_stats(paths,distance_bin=5.0,dims=dims)
