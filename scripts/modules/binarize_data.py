@@ -1,28 +1,47 @@
 import os, cv2, argparse, sys
 from pathlib import Path
+import numpy as np
 from modules.stack_utils import prep_folder, validate_folder
 
-def convert_ct_images_to_binary(input_folder, output_folder):
+def convert_ct_images_to_binary(input_folder, output_folder, bump=0):
     prep_folder(output_folder)
 
-    # Loop through each file in the input folder
-    for file_name in os.listdir(input_folder):
-        if file_name.lower().endswith('.bmp'):
-            input_path = os.path.join(input_folder, file_name)
-            # Load the image in grayscale mode (essential for thresholding)
-            image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                print(f"Warning: Could not load {input_path}. Skipping.")
-                continue
+    # 1) collect all the .bmp paths
+    files = [f for f in os.listdir(input_folder) if f.lower().endswith('.bmp')]
+    if not files:
+        print("No .bmp files found in", input_folder)
+        return
 
-            # Apply Otsu's thresholding
-            # The threshold value is automatically determined.
-            _, binary_image = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # 2) load every image and stash both its flattened pixels and the image itself
+    all_pixels = []
+    images = []
+    for fn in files:
+        path = os.path.join(input_folder, fn)
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            print(f"Warning: could not load {fn}, skipping.")
+            continue
+        images.append((fn, img))
+        all_pixels.append(img.ravel())
+    
+    # 3) concatenate into one long row and compute Otsu on it
+    all_pixels = np.concatenate(all_pixels).reshape(1, -1)
+    otsu_T, _ = cv2.threshold(
+        all_pixels, 0, 255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+    print(f"Global Otsu threshold: {otsu_T}")
 
-            # Construct the output path and save the binary image as a .bmp file
-            output_path = os.path.join(output_folder, file_name)
-            cv2.imwrite(output_path, binary_image)
-            print(f"Processed {file_name} and saved binary image to {output_path}")
+    # 4) optionally bump it up so your mid-grays stay black
+    T = min(255, int(otsu_T) + bump)
+    print(f"Using T = {T} for all slices")
+
+    # 5) apply the same T to every image and save
+    for fn, img in images:
+        _, binary = cv2.threshold(img, T, 255, cv2.THRESH_BINARY)
+        outp = os.path.join(output_folder, fn)
+        cv2.imwrite(outp, binary)
+        print(f"Processed and saved {fn}")
 
 # Example usage:
 if __name__ == '__main__':

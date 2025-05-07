@@ -165,6 +165,7 @@ def calc_path_stats(paths, distance_bin = 1.0, dims = [1.0, 1.0, 1.0]):
     # 1) compute lengths and ratios
     lengths = np.array([compute_path_length(p, dims) for p in paths])
     ratios  = np.array([calc_deflection_ratio(p) * 100.0 for p in paths])
+    overal_mean_ratio = ratios.mean()
 
     # 2) define bins
     max_len = lengths.max() if len(lengths)>0 else 0.0
@@ -191,9 +192,9 @@ def calc_path_stats(paths, distance_bin = 1.0, dims = [1.0, 1.0, 1.0]):
     x = np.arange(nbins)
     fig, ax1 = plt.subplots(figsize=(10,6))
 
-    bars = ax1.bar(x, mean_ratio, label='Mean Deflection (%)', alpha=0.75, yerr=ci_errors)
+    bars = ax1.bar(x, mean_ratio, label='Curvature Ratio (%)', alpha=0.75, yerr=ci_errors)
     ax1.set_xlabel(f'Path Length (mm) [bin size = {distance_bin} mm]')
-    ax1.set_ylabel('Mean Deflection Ratio (%)')
+    ax1.set_ylabel('Curvature Ratio (%)')
     ax1.set_ylim(0, mean_ratio.max()*1.1 if len(mean_ratio)>0 else 1)
     ax1.set_xticks(x)
     ax1.set_xticklabels([f"{bin_edges[i]:.1f}–{bin_edges[i+1]:.1f}" for i in x],
@@ -209,7 +210,7 @@ def calc_path_stats(paths, distance_bin = 1.0, dims = [1.0, 1.0, 1.0]):
     ax1.legend(loc='upper left')
     ax2.legend([line_counts], ['Paths per Bin'], loc='upper right')
 
-    plt.title('Deflection Ratio vs. Path Length Distribution')
+    plt.title(f'Curvature Ratio vs. Path Length Distribution (Avg Ratio {overal_mean_ratio:.2f}%)')
     fig.tight_layout()
     plt.show()
 
@@ -358,20 +359,19 @@ def trace_segments_mt(distances, nodes, dims=[1.0,1.0,1.0],
     return trace_stack, paths
 
 
-def calculate_bone_fraction_curve(mask_folder, data_folder, distance_map_folder, edge_stack_folder):
+def calculate_bone_fraction_curve(mask_folder, data_folder, distance_map_folder, edge_stack_folder, dims = [1.0,1.0,1.0]):
     mask_stack, filenames = load_image_stack(mask_folder)
     data_stack, _ = load_image_stack(data_folder)
 
     edge_stack = process_stack(mask_stack)
     save_image_stack(edge_stack_folder, edge_stack, filenames)
 
-    distance_stack = compute_distance_transform(mask_stack, edge_stack, [1.0,0.7421875,0.7421875])
+    distance_stack = compute_distance_transform(mask_stack, edge_stack, dims)
     normalized_stack = normalize_distance_stack(distance_stack)
     save_image_stack(distance_map_folder, normalized_stack, filenames)
     calc_bone_distribution(distance_stack, data_stack, 0.75)
 
-def generate_node_stack(mask_folder, data_folder, distance_map_folder, point_folder, node_folder, trace_folder):
-    dims = [1.0,0.7421875,0.7421875]
+def generate_node_stack(mask_folder, data_folder, distance_map_folder, point_folder, node_folder, trace_folder, dims = [1.0,1.0,1.0]):
     mask_stack, filenames = load_image_stack(mask_folder)
     data_stack, _ = load_image_stack(data_folder)
     point_stack, distance_stack, node_stack, distances, points = find_nodes(data_stack, mask_stack, dims)
