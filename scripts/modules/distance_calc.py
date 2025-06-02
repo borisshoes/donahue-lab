@@ -328,6 +328,7 @@ def trace_segments_mt(distances, nodes, dims=[1.0,1.0,1.0],
     pairs = list(combinations(nodes, 2))
     random.shuffle(pairs)
     num_pairs = len(pairs)
+    pairs = pairs[:300]
 
     paths = []
     # helper to call A* with our fixed params

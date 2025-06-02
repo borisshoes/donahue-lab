@@ -1,7 +1,7 @@
 from modules import re_axis_data, mask_script_3d, mask_script_bmp, distance_calc, binarize_data
 
 if __name__ == "__main__":
-    bitmap_folder = "./BHS2 Bitmaps"
+    bitmap_folder = "./BHS6 Bitmaps"
     output_folder = "./generated"
     reaxis_folder = output_folder+"/reaxis"
     masks_folder = output_folder+"/masks"

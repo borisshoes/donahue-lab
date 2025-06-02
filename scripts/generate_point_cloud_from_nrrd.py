@@ -4,6 +4,7 @@ from tkinter import filedialog
 from modules import nrrd_to_bmp
 from modules import mask_blank
 from modules import calc_voronoi_points
+from modules import binarize_data
 from modules.stack_utils import prep_folder
 
 def main():
@@ -31,9 +32,10 @@ def main():
     folder_path = "./generated"
 
     nrrd_to_bmp.convert_nrrd_to_bmp(input_file, folder_path+"/bmp_stack", "last")
+    binarize_data.convert_ct_images_to_binary(folder_path+"/bmp_stack",folder_path+"/binary_bmps")
     mask_blank.process_images(folder_path+"/bmp_stack", folder_path+"/mask_stack")
     calc_voronoi_points.generate_all(
-        folder_path+"/bmp_stack",
+        folder_path+"/binary_bmps",
         folder_path+"/mask_stack",
         folder_path)
     
